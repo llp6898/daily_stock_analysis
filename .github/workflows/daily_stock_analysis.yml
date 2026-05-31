@@ -1,0 +1,99 @@
+name: Daily Stock Analysis
+
+on:
+  schedule:
+    # 盘前分析 08:25 北京时间 Mon-Fri
+    - cron: '25 0 * * 1-5'
+    # 午盘复盘 11:25 北京时间 Mon-Fri
+    - cron: '25 3 * * 1-5'
+    # 盘后复盘 15:05 北京时间 Mon-Fri
+    - cron: '5 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式: pre / mid / close'
+        required: true
+        default: 'close'
+
+env:
+  TZ: "Asia/Shanghai"
+
+jobs:
+  daily-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: pip install pandas requests simplejson
+
+      - name: 确认文件
+        run: |
+          echo "=== 工作目录文件 ===" && ls -la *.py *.json 2>/dev/null | head -10
+          echo "=== 脚本行数 ===" && wc -l daily_market_analysis.py
+
+      - name: 盘前分析
+        if: github.event.schedule == '25 0 * * 1-5' || github.event.inputs.mode == 'pre'
+        run: |
+          python3 daily_market_analysis.py pre > /tmp/report_pre.txt 2>&1
+          echo "=== 盘前分析输出 ===" && tail -30 /tmp/report_pre.txt
+        continue-on-error: true
+
+      - name: 午盘复盘
+        if: github.event.schedule == '25 3 * * 1-5' || github.event.inputs.mode == 'mid'
+        run: |
+          python3 daily_market_analysis.py mid > /tmp/report_mid.txt 2>&1
+          echo "=== 午盘复盘输出 ===" && tail -30 /tmp/report_mid.txt
+        continue-on-error: true
+
+      - name: 盘后复盘
+        if: github.event.schedule == '5 7 * * 1-5' || github.event.inputs.mode == 'close'
+        run: |
+          python3 daily_market_analysis.py close > /tmp/report_close.txt 2>&1
+          echo "=== 盘后复盘输出 ===" && tail -30 /tmp/report_close.txt
+        continue-on-error: true
+
+      - name: 保存分析报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-report-${{ github.run_number }}
+          path: |
+            /tmp/report_*.txt
+            daily_report.json
+          retention-days: 7
+
+      - name: 发送飞书通知
+        if: github.event.schedule != '' || github.event.inputs.mode == 'close'
+        run: |
+          python3 -c "
+import urllib.request, json, os, glob
+files = glob.glob('/tmp/report_*.txt')
+latest = max(files, default='')
+if latest:
+    with open(latest) as f:
+        content = f.read()[-600:]
+    payload = json.dumps({
+        'msg_type': 'text',
+        'content': {'text': '[GitHub Actions] 每日复盘\n' + content}
+    }).encode()
+    webhook = 'https://open.feishu.cn/open-apis/bot/v2/hook/' + os.environ.get('FEISHU_BOT_KEY', '')
+    req = urllib.request.Request(webhook, data=payload, headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            print('飞书通知发送成功:', r.read().decode())
+    except Exception as e:
+        print('飞书通知发送失败:', e)
+"
+        env:
+          FEISHU_BOT_KEY: ${{ secrets.FEISHU_BOT_KEY }}
+        continue-on-error: true
