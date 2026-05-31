@@ -75,22 +75,8 @@ jobs:
       - name: 发送飞书通知
         if: github.event.schedule != '' || github.event.inputs.mode == 'close'
         run: |
-          python3 -c "
-import urllib.request, json, os, glob
-files = glob.glob('/tmp/report_*.txt')
-latest = max(files, default='')
-if latest:
-    with open(latest) as f:
-        content = f.read()[-600:]
-    payload = json.dumps({
-        'msg_type': 'text',
-        'content': {'text': '[GitHub Actions] 每日复盘\n' + content}
-    }).encode()
-    webhook = 'https://open.feishu.cn/open-apis/bot/v2/hook/' + os.environ.get('FEISHU_BOT_KEY', '')
-    req = urllib.request.Request(webhook, data=payload, headers={'Content-Type': 'application/json'})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            print('飞书通知发送成功:', r.read().decode())
+          python3 send_feishu.py "
+          
     except Exception as e:
         print('飞书通知发送失败:', e)
 "
