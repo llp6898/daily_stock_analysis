@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: stock-analyzer
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py --serve-only --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: API_PORT
+        value: 8000
+      - key: TUSHARE_TOKEN
+        sync: false
+      - key: FEISHU_BOT_KEY
+        sync: false
+      - key: TZ
+        value: Asia/Shanghai
