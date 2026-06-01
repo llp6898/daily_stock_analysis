@@ -1,4 +1,7 @@
-# PR 自动审查 - 语法检查 + AI 语义审查
+1. railway.json         → 项目根目录
+2. render.yaml          → 项目根目录
+3. DEPLOY.md            → 项目根目录
+4. deploy_railway.py    → 任意目录（可选）# PR 自动审查 - 语法检查 + AI 语义审查
 # 当有 PR 创建或更新时自动触发
 
 name: PR Review
