@@ -1,4 +1,6 @@
-# PR 自动审查 - 语法检查 + AI 语义审查
+# Pgit add .
+git commit -m "fix: 拆分飞书通知脚本"
+git push origin mainR 自动审查 - 语法检查 + AI 语义审查
 # 当有 PR 创建或更新时自动触发
 
 name: PR Review
