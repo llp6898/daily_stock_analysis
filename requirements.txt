@@ -1,13 +1,13 @@
-# ===================================
-# A股自选股智能分析系统 - 依赖列表（精简版）
-# ===================================
-
+# A股自选股智能分析系统 - 依赖列表
 python-dotenv>=1.0.0
 requests>=2.31.0
 pandas>=2.0.0
 numpy>=1.24.0
 openai>=1.0.0
 akshare>=1.12.0
+tushare>=1.4.0
+tenacity>=8.2.0
+pytdx>=1.72
 python-telegram-bot>=20.0
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
