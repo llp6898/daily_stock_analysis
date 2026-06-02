@@ -180,7 +180,7 @@ def scan_one(ts_code):
             "ma5": ma5, "ma10": ma10, "ma20": ma20,
             "macd_bar": macd_bar, "smc": smc_val, "smc_zone": smc_zone,
             "score": score, "details": details, "共振": 共振,
-            "gain60": round(gain60, 1), "连续阳": 连续阳, "blackhorse": bh
+            "gain60": round(gain60, 1), "连续阳": 连续阳, "blackhorse": "1" if bh else "0"
         }
     except Exception as e:
         return None
