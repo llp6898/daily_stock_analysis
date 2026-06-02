@@ -11,3 +11,4 @@ pytdx>=1.72
 python-telegram-bot>=20.0
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
+fake-useragent>=1.4.0
