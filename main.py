@@ -13,6 +13,18 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("stock-api")
 
+# ========== CORS 跨域支持 ==========
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204
+
 API_PORT = int(os.environ.get("PORT") or os.environ.get("API_PORT", 8000))
 FEISHU_BOT_KEY = os.environ.get("FEISHU_BOT_KEY", "")
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "b2d323ce6e8bf2c1549a72fd08538c1dc1ac4bf563550632c1a01759")
