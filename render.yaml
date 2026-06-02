@@ -1,3 +1,5 @@
+# Render Blueprint — A股自选股智能分析系统
+
 services:
   - type: web
     name: stock-analyzer
@@ -12,5 +14,9 @@ services:
         sync: false
       - key: FEISHU_BOT_KEY
         sync: false
+      - key: STOCK_LIST
+        value: "600162,301581,600143,601985"
       - key: TZ
         value: Asia/Shanghai
+      - key: LOG_LEVEL
+        value: INFO
