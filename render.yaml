@@ -20,3 +20,7 @@ services:
         value: Asia/Shanghai
       - key: LOG_LEVEL
         value: INFO
+      - key: RUN_IMMEDIATELY
+        value: "false"
+      - key: SCHEDULE_ENABLED
+        value: "false"
