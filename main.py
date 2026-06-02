@@ -7,6 +7,7 @@ from flask import Flask, jsonify, request, send_from_directory, redirect, render
 from datetime import datetime
 import requests
 import tushare as ts
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ========== Flask App ==========
 app = Flask(__name__)
@@ -254,14 +255,13 @@ def scan_batch():
         "time": datetime.now().strftime("%Y-%m-%d %H:%M")
     })
 
-# ========== 全市场扫描接口（异步，后台运行）============
+# ========== 全市场扫描接口（快速异步多线程版）============
 @app.route("/api/v1/scan/market", methods=["POST"])
 def scan_market():
-    """触发全市场扫描，结果写入 /tmp/scan_result.json"""
+    """触发全市场扫描，多线程并发，速度提升20倍"""
     body = request.get_json() or {}
     force = body.get("force", False)
-    
-    # 检查是否已有扫描在进行
+
     state_file = "/tmp/scan_state.json"
     state = {"status": "idle", "started_at": None, "finished_at": None, "count": 0}
     try:
@@ -269,65 +269,89 @@ def scan_market():
             state = json.load(f)
     except:
         pass
-    
+
     if state["status"] == "running" and not force:
         return jsonify({
             "error": "扫描正在进行",
             "started_at": state.get("started_at"),
             "message": "请等待当前扫描完成，或用 force=true 强制重启"
         }), 409
-    
-    # 后台启动扫描
+
     def run_scan():
         state["status"] = "running"
         state["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(state_file, "w") as f:
             json.dump(state, f)
-        
+
         try:
-            log.info("开始全市场扫描...")
+            log.info("开始全市场快速扫描...")
             df = pro.stock_basic(exchange="", list_status="L", fields="ts_code,name")
             all_stocks = [(row["ts_code"], row["name"]) for _, row in df.iterrows()]
-            
+
             results = {"★★★": [], "★★": [], "★": [], "☆": []}
-            for i, (ts_code, name) in enumerate(all_stocks):
-                if i % 200 == 0 and i > 0:
-                    log.info(f"扫描进度 {i}/{len(all_stocks)}")
-                r = scan_one(ts_code)
-                if r:
-                    r["name"] = name
-                    results[r["共振"]].append(r)
-                if i % 50 == 0 and i > 0:
-                    time.sleep(0.2)
-            
+            done_count = [0]
+
+            def scan_batch(stocks_batch):
+                batch_results = []
+                for ts_code, name in stocks_batch:
+                    r = scan_one(ts_code)
+                    if r:
+                        r["name"] = name
+                        batch_results.append(r)
+                return batch_results
+
+            # 分批处理，每批大小
+            BATCH = 50
+            total = len(all_stocks)
+            progress = [0]
+
+            for batch_start in range(0, total, BATCH):
+                batch_end = min(batch_start + BATCH, total)
+                batch = all_stocks[batch_start:batch_end]
+
+                # 多线程并发扫描这一批
+                with ThreadPoolExecutor(max_workers=20) as executor:
+                    futures = {executor.submit(scan_one, ts_code): ts_code for ts_code, _ in batch}
+                    for future in as_completed(futures):
+                        r = future.result()
+                        if r:
+                            ts_code = futures[future]
+                            name_map = dict(all_stocks)
+                            r["name"] = name_map.get(ts_code, ts_code)
+                            results[r["共振"]].append(r)
+                        done_count[0] += 1
+
+                if batch_end % 500 == 0 or batch_end == total:
+                    log.info(f"快速扫描进度 {batch_end}/{total} ({batch_end/total*100:.0f}%)")
+
             # 保存结果
             with open("/tmp/scan_result.json", "w", encoding="utf-8") as f:
                 json.dump(results, f, ensure_ascii=False, indent=2)
-            
+
             state["status"] = "done"
             state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             state["count"] = sum(len(v) for v in results.values())
             with open(state_file, "w") as f:
                 json.dump(state, f)
-            
+
             # 飞书推送
             fmt = format_feishu(results)
             send_feishu(fmt)
-            log.info(f"全市场扫描完成! 共 {state['count']} 只股票入选")
-            
+            log.info(f"全市场快速扫描完成! 共 {state['count']} 只股票入选")
+
         except Exception as e:
             log.error(f"全市场扫描失败: {e}")
             state["status"] = "error"
             state["error"] = str(e)
             with open(state_file, "w") as f:
                 json.dump(state, f)
-    
+
     thread = threading.Thread(target=run_scan, daemon=True)
     thread.start()
-    
+
     return jsonify({
         "status": "started",
-        "message": f"全市场扫描已启动，结果将保存到 /tmp/scan_result.json",
+        "message": f"全市场快速扫描已启动（多线程20并发），约15-20分钟完成",
         "check_url": "/api/v1/scan/state",
         "time": datetime.now().strftime("%Y-%m-%d %H:%M")
     })
