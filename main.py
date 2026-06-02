@@ -3,7 +3,7 @@ A股自选股智能分析系统 - API 服务入口
 Flask API Server + 全量扫描定时任务
 """
 import os, sys, json, time, logging, threading
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory, redirect, render_template_string
 from datetime import datetime
 import requests
 import tushare as ts
@@ -218,7 +218,7 @@ def market_summary():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ========== 全市场批量扫描接口 ==========
+# ========== 全市场批量扫描接口（同步，返回结果）============
 @app.route("/api/v1/scan/batch", methods=["POST"])
 def scan_batch():
     """接收股票代码列表，批量扫描，返回结果"""
@@ -226,15 +226,15 @@ def scan_batch():
     codes = body.get("codes", [])
     if not codes:
         return jsonify({"error": "codes参数不能为空"}), 400
-    if len(codes) > 200:
-        return jsonify({"error": "单次最多200只股票"}), 400
-    
+    if len(codes) > 100:
+        return jsonify({"error": "单次最多100只股票"}), 400
+
     results = {}
     for code in codes:
         r = scan_one(code)
         if r:
             results[code] = r
-    
+
     return jsonify({
         "count": len(results),
         "total_submitted": len(codes),
@@ -381,7 +381,41 @@ def get_name(ts_code):
     code = ts_code.replace(".SH", "").replace(".SZ", "")
     return names.get(code, code)
 
-# ========== 主程序 ==========
+# ========== 静态文件/Swagger Docs ==========
+SWAGGER_HTML = """
+<!DOCTYPE html>
+<html><head><title>A股分析 API</title></head>
+<body style="font-family: monospace; padding: 40px; background: #0a0a0a; color: #fff;">
+<h2 style="color: #4ade80">📊 A股分析系统 API</h2>
+<table style="border-collapse: collapse; width: 700px">
+<tr style="border-bottom: 1px solid #333"><th style="text-align:left;padding:8px">方法</th><th style="text-align:left;padding:8px">路径</th><th style="text-align:left;padding:8px">说明</th></tr>
+<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/health</td><td style="padding:8px">健康检查</td></tr>
+<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/api/v1/market/summary</td><td style="padding:8px">大盘摘要</td></tr>
+<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/api/v1/stock/analysis?code=600162.SH</td><td style="padding:8px">持仓股分析</td></tr>
+<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#f59e0b">POST</td><td style="padding:8px">/api/v1/scan/batch</td><td style="padding:8px">批量扫描（≤100只）</td></tr>
+<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#f59e0b">POST</td><td style="padding:8px">/api/v1/scan/market</td><td style="padding:8px">全市场扫描（异步）</td></tr>
+<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/api/v1/scan/state</td><td style="padding:8px">查询扫描状态</td></tr>
+<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/api/v1/scan/results</td><td style="padding:8px">读取上次扫描结果</td></tr>
+</table>
+<h3 style="color:#f59e0b">批量扫描示例</h3>
+<pre style="background:#1a1a1a;padding:16px;border-radius:8px;color:#86efac">
+POST /api/v1/scan/batch
+Body: {"codes": ["600162.SH","601985.SH","601101.SH"]}
+</pre>
+<h3 style="color:#f59e0b">全市场扫描示例</h3>
+<pre style="background:#1a1a1a;padding:16px;border-radius:8px;color:#86efac">
+POST /api/v1/scan/market
+Body: {}   # 空对象即可，5-8分钟后结果推送到飞书
+</pre>
+</body></html>"""
+
+@app.route("/docs")
+def docs():
+    return render_template_string(SWAGGER_HTML)
+
+@app.route("/")
+def index():
+    return redirect("/docs")
 if __name__ == "__main__":
     log.info(f"启动A股分析API服务器，端口:{API_PORT}")
     send_feishu(f"🚀 A股分析系统已启动！时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
