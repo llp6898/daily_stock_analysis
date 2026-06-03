@@ -26,13 +26,16 @@ def get_pro():
 def code_normalize(code: str) -> str:
     """统一股票代码格式"""
     code = code.upper().strip()
-    if not any(code.startswith(p) for p in ["SH", "SZ", "BJ"]):
-        if code.startswith(("6", "5", "9")):
-            code = "SH" + code
-        elif code.startswith(("0", "3", "2")):
-            code = "SZ" + code
-        elif code.startswith(("4", "8")):
-            code = "BJ" + code
+    # 如果已带沪/深/京前缀，直接返回
+    if any(code.startswith(p) for p in ["SH", "SZ", "BJ"]):
+        return code
+    # 否则根据代码数字前缀补全
+    if code.startswith(("6", "5", "9")):
+        code = "SH" + code
+    elif code.startswith(("0", "3", "2")):
+        code = "SZ" + code
+    elif code.startswith(("4", "8")):
+        code = "BJ" + code
     return code
 
 
