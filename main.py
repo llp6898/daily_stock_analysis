@@ -1,10 +1,10 @@
 """
-A股自选股智能分析系统 - API 服务入口
+A股自选股智能分析系统 - API 服务入口from klines_route import klines_bp
+
 Flask API Server + 全量扫描定时任务
 """
 import os, sys, json, time, logging, threading
 from flask import Flask, jsonify, request, send_from_directory, redirect, render_template_string
-from flask import Flask, Blueprint, jsonify, request, send_from_directory, redirect, render_template_string
 from datetime import datetime
 import requests
 import tushare as ts
@@ -12,10 +12,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ========== Flask App ==========
 app = Flask(__name__)
-
-# ========== K线历史接口 ==========
-from klines_route import klines_bp
-app.register_blueprint(klines_bp)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("stock-api")
 
@@ -457,6 +453,9 @@ def docs():
 @app.route("/")
 def index():
     return redirect("/docs")
+
+app.register_blueprint(klines_bp)
+
 if __name__ == "__main__":
     log.info(f"启动A股分析API服务器，端口:{API_PORT}")
     send_feishu(f"🚀 A股分析系统已启动！时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
