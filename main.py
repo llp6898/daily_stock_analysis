@@ -310,7 +310,7 @@ def scan_market():
                 batch = all_stocks[batch_start:batch_end]
 
                 # 多线程并发扫描这一批
-                with ThreadPoolExecutor(max_workers=20) as executor:
+                with ThreadPoolExecutor(max_workers=50) as executor:
                     futures = {executor.submit(scan_one, ts_code): ts_code for ts_code, _ in batch}
                     for future in as_completed(futures):
                         r = future.result()
