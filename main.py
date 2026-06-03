@@ -4,6 +4,7 @@ Flask API Server + 全量扫描定时任务
 """
 import os, sys, json, time, logging, threading
 from flask import Flask, jsonify, request, send_from_directory, redirect, render_template_string
+from flask import Flask, Blueprint, jsonify, request, send_from_directory, redirect, render_template_string
 from datetime import datetime
 import requests
 import tushare as ts
@@ -11,6 +12,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ========== Flask App ==========
 app = Flask(__name__)
+
+# ========== K线历史接口 ==========
+from klines_route import klines_bp
+app.register_blueprint(klines_bp)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("stock-api")
 
