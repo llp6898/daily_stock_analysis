@@ -1,8 +1,11 @@
 """
-A股自选股智能分析系统 - API 服务入口from klines_route import klines_bp
+A股自选股智能分析系统 - API 服务入口
 
 Flask API Server + 全量扫描定时任务
 """
+
+from klines_route import klines_bp
+
 import os, sys, json, time, logging, threading
 from flask import Flask, jsonify, request, send_from_directory, redirect, render_template_string
 from datetime import datetime
@@ -84,366 +87,201 @@ def smc_score(closes, highs, lows):
     price = closes[-1]
     swing_highs = [highs[i] for i in range(5, len(highs)-5)
                    if highs[i] == max(highs[i-5:i+6])]
-    swing_lows = [lows[i] for i in range(5, len(lows)-5)
+    swing_lows = [lows[i] for i in range(5, len(highs)-5)
                   if lows[i] == min(lows[i-5:i+6])]
     if not swing_highs or not swing_lows:
         return 0, "无结构"
     last_low = min(swing_lows[-3:])
     last_high = max(swing_highs[-3:])
-    range_size = last_high - last_low
-    if range_size < price * 0.03:
-        return 0, "区间过窄"
-    if price > last_high * 0.98:
-        ps = 3
-    elif price > (last_high + last_low) / 2:
-        ps = 2
-    elif price < last_low * 1.02:
-        ps = 1
-    else:
-        ps = 0
-    ma_growth = (ma20 - ma60) / ma60 * 100
-    ts_s = 2 if ma_growth > 5 else (1 if ma_growth > 0 else 0)
-    zone_map = {3: "突破", 2: "区间上半", 1: "区间下限吸筹", 0: "区间下半"}
-    return min(ps + ts_s, 5), zone_map.get(ps, "未知")
+    score = 0
+    reason = []
+    if price < ma20:
+        score += 2; reason.append("价格<MA20")
+    if price > ma20:
+        score += 3; reason.append("价格>MA20")
+    if price < ma60:
+        score += 2; reason.append("价格<MA60")
+    if ma20 > ma60:
+        score += 3; reason.append("MA20>MA60多头")
+    if price >= last_low * 0.98:
+        score += 4; reason.append("接近支撑")
+    if len(swing_lows) >= 3:
+        swing_range = last_high - last_low
+        pos = (price - last_low) / swing_range if swing_range > 0 else 0.5
+        if pos < 0.3:
+            score += 5; reason.append("低位支撑区")
+        elif pos > 0.7:
+            score += 2; reason.append("高位风险区")
+    return min(score, 15), "; ".join(reason) if reason else "中性"
 
-# ========== 新优选公式 ==========
-def formula_score(rsi, vr, macd_bar, ma5, ma10, ma20, gain60, 连续阳):
-    s, details = 0, []
-    if vr >= 1.8:
-        s += 2; details.append(f"VR{vr:.1f}+2")
-    elif vr >= 1.2:
-        s += 1; details.append(f"VR{vr:.1f}+1")
-    if 45 <= rsi <= 68:
-        s += 2; details.append(f"RSI{rsi:.0f}+2")
-    elif 30 <= rsi < 45:
-        s += 1; details.append(f"RSI{rsi:.0f}+1低")
-    elif 68 < rsi <= 75:
-        s += 1; details.append(f"RSI{rsi:.0f}+1")
-    elif rsi > 75:
-        s -= 2; details.append(f"RSI{rsi:.0f}-2高")
-    if macd_bar is not None and macd_bar > 0:
-        s += 3; details.append("MACD金叉+3")
-    elif macd_bar is not None and macd_bar > -0.1:
-        s += 1; details.append("MACD零轴+1")
-    if ma5 and ma10 and ma20 and ma5 > ma10 > ma20:
-        s += 2; details.append("MA多头+2")
-    elif ma5 and ma10 and ma5 > ma10:
-        s += 1; details.append("MA拐头+1")
-    if 连续阳 >= 3:
-        s += 2; details.append(f"连阳{连续阳}+2")
-    elif 连续阳 >= 1:
-        s += 1; details.append(f"连阳{连续阳}+1")
-    if gain60 > 60:
-        s -= 3; details.append(f"g60{gain60:.0f}%-3")
-    elif gain60 > 30:
-        s -= 1; details.append(f"g60{gain60:.0f}%-1")
-    return s, details
+# ========== 新优选公式 v2.0 ==========
+def new_formula_score(v):
+    score = 0
+    reasons = []
+    if v["vr"] >= 1.8: score += 2; reasons.append("VR放量")
+    if 45 <= v["rsi"] <= 68: score += 2; reasons.append("RSI最佳区间")
+    if v["rsi"] > 75: score -= 2; reasons.append("RSI高位")
+    dif, dea, macd_bar = v.get("macd_dif"), v.get("macd_dea"), v.get("macd_bar")
+    if dif is not None and dea is not None and macd_bar is not None and dif < 0.1 and macd_bar > 0:
+        score += 3; reasons.append("MACD低位金叉")
+    if v["ma多头"]: score += 2; reasons.append("MA多头排列")
+    if v["价格在MA20上"]: score += 1; reasons.append("价格在MA20上")
+    if v["连续阳线"] >= 3: score += 2; reasons.append("连续阳线")
+    if v["g60"] > 60: score -= 3; reasons.append("60日涨幅过大")
+    return score, reasons
 
-# ========== 黑马启动v2 ==========
-def is_blackhorse(rsi, vr, ma5, ma10, ma20, gain_today, gain60):
-    return (
-        ma5 is not None and ma10 is not None and ma20 is not None and
-        ma5 > ma10 > ma20 and vr >= 1.5 and
-        30 <= rsi <= 80 and gain_today >= -2 and gain60 < 80
-    )
-
-# ========== 扫描单只 ==========
-def scan_one(ts_code):
+# ========== 获取持仓股RSI/MA ==========
+def get_stock_indicators(code):
     try:
-        df = pro.daily(ts_code=ts_code, end_date=datetime.now().strftime("%Y%m%d"), limit=80)
-        if df is None or df.empty or len(df) < 30:
+        df = ts.pro_bar(ts_code=code, freq="D", start_date="20250101", adj="qfq",
+                        api=ts.pro_api(TUSHARE_TOKEN))
+        if df is None or len(df) < 30:
             return None
-        closes = df["close"].iloc[::-1].values
-        vols = df["vol"].iloc[::-1].values
-        highs = df["high"].iloc[::-1].values
-        lows = df["low"].iloc[::-1].values
-        price = closes[-1]
-        prev = closes[1]
-        gain_today = (price - prev) / prev * 100 if prev else 0
-        gain60 = (price - closes[min(60, len(closes)-1)]) / closes[min(60, len(closes)-1)] * 100
-        vr = round(vols[-1] / (sum(vols[-5:]) / 5 or 1), 2)
-        rsi = calc_rsi(closes[-15:])
-        if rsi is None:
-            return None
-        _, _, macd_bar = calc_macd(closes)
+        closes = list(df["close"].iloc[-60:])
+        highs = list(df["high"].iloc[-60:])
+        lows = list(df["low"].iloc[-60:])
+        chg = (closes[-1] - closes[-2]) / closes[-2] * 100 if len(closes) >= 2 else 0
+        rsi14 = calc_rsi(closes, 14)
+        rsi26 = calc_rsi(closes, 26)
         ma5 = calc_ma(closes, 5)
         ma10 = calc_ma(closes, 10)
         ma20 = calc_ma(closes, 20)
-        连续阳 = sum(1 for i in range(1, min(6, len(closes)))
-                     if closes[-i] >= closes[-i-1])
-        smc_val, smc_zone = smc_score(closes, highs, lows)
-        score, details = formula_score(rsi, vr, macd_bar, ma5, ma10, ma20, gain60, 连续阳)
-        bh = is_blackhorse(rsi, vr, ma5, ma10, ma20, gain_today, gain60)
-        共振 = "★★★" if (bh and score >= 6) else "★★" if (bh or score >= 6) else "★" if score >= 4 else "☆"
+        ma60 = calc_ma(closes, 60)
+        dif, dea, macd_bar = calc_macd(closes)
+        vr = round(df["vol"].iloc[-5:].sum() / max(df["vol"].iloc[-20:-5].sum(), 1), 2)
+        g60 = round((closes[-1] / max(closes[-60], 1) - 1) * 100, 2) if len(closes) >= 60 else 0
+        ma5_above = ma5 > ma10 > ma20 if all([ma5, ma10, ma20]) else False
+        price_above_ma20 = closes[-1] > ma20 if ma20 else False
+        smc_val, smc_reason = smc_score(closes, highs, lows)
+        score, reasons = new_formula_score({
+            "vr": vr, "rsi": rsi14 or 0, "ma多头": ma5_above,
+            "价格在MA20上": price_above_ma20,
+            "连续阳线": sum(1 for i in range(1, min(4, len(closes)))
+                        if closes[-i] > closes[-i-1]),
+            "g60": g60, "macd_dif": dif, "macd_dea": dea, "macd_bar": macd_bar
+        })
+        dif_val, dea_val, macd_bar_val = dif, dea, macd_bar
         return {
-            "code": ts_code, "price": round(price, 2),
-            "涨跌幅": round(gain_today, 2), "rsi": rsi, "vr": vr,
-            "ma5": ma5, "ma10": ma10, "ma20": ma20,
-            "macd_bar": macd_bar, "smc": smc_val, "smc_zone": smc_zone,
-            "score": score, "details": details, "共振": 共振,
-            "gain60": round(gain60, 1), "连续阳": 连续阳, "blackhorse": "1" if bh else "0"
+            "code": code, "name": "", "price": closes[-1], "chg": round(chg, 2),
+            "rsi": rsi14, "rsi26": rsi26, "vr": vr, "g60": g60,
+            "ma5": ma5, "ma10": ma10, "ma20": ma20, "ma60": ma60,
+            "dif": dif_val, "dea": dea_val, "macd_bar": macd_bar_val,
+            "ma多头": ma5_above, "价格在MA20上": price_above_ma20,
+            "smc_score": smc_val, "smc_reason": smc_reason,
+            "新公式评分": score, "新公式理由": reasons,
+            "共振": "★★★" if score >= 8 and rsi14 and rsi14 <= 75 else
+                   "★★" if score >= 6 else
+                   "★" if score >= 4 else ""
         }
     except Exception as e:
-        return None
+        return {"code": code, "error": str(e)}
+
+# ========== 持仓股分析 ==========
+@app.route("/api/v1/stock/analysis", methods=["GET"])
+def stock_analysis():
+    code = request.args.get("code", "")
+    v = get_stock_indicators(code)
+    if not v:
+        return jsonify({"error": "无数据"}), 404
+    if "error" in v:
+        return jsonify(v), 500
+    return jsonify(v)
+
+# ========== 批量扫描 ==========
+@app.route("/api/v1/scan/batch", methods=["POST"])
+def scan_batch():
+    try:
+        body = request.get_json() or {}
+        codes = body.get("codes", STOCK_LIST)
+        results = {}
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(get_stock_indicators, c): c for c in codes}
+            for fut in as_completed(futs):
+                v = fut.result()
+                if v:
+                    results[v["code"]] = v
+        ranked = sorted(results.values(), key=lambda x: x.get("新公式评分", 0), reverse=True)
+        return jsonify({"results": results, "ranked": ranked, "count": len(results)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ========== 健康检查 ==========
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "time": datetime.now().strftime("%Y-%m-%d %H:%M")})
 
-# ========== 持仓股分析 ==========
-@app.route("/api/v1/stock/analysis")
-def stock_analysis():
-    ts_code = request.args.get("code", "")
-    if not ts_code:
-        return jsonify({"error": "缺少 code 参数"}), 400
-    try:
-        df = pro.daily(ts_code=ts_code)
-        if df is None or df.empty:
-            return jsonify({"error": "无数据"}), 404
-        closes = df["close"].iloc[::-1].values
-        prices = df["close"].iloc[::-1].values
-        ma5 = round(float(prices[-5:].mean()), 2) if len(prices) >= 5 else None
-        ma20 = round(float(prices[-20:].mean()), 2) if len(prices) >= 20 else None
-        rsi = calc_rsi(closes[-15:]) if len(closes) >= 15 else None
-        chg = round(float(df.iloc[-1]["pct_chg"]), 2)
-        return jsonify({
-            "code": ts_code, "name": get_name(ts_code),
-            "price": float(prices[-1]), "ma5": ma5, "ma20": ma20,
-            "rsi14": rsi, "涨跌幅": chg,
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M")
-        })
-    except Exception as e:
-        log.error(f"Analysis error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-# ========== 大盘摘要 ==========
-@app.route("/api/v1/market/summary")
+# ========== 市场数据 ==========
+@app.route("/api/v1/market/summary", methods=["GET"])
 def market_summary():
     try:
-        df = pro.index_daily(ts_code="000001.SH")
-        latest = df.iloc[-1]
+        idx_map = {
+            "上证指数": "000001.SH", "沪深300": "000300.SH",
+            "创业板": "399006.SZ", "深证成指": "399001.SZ"
+        }
+        data = {}
+        for name, code in idx_map.items():
+            try:
+                df = pro.daily(ts_code=code, start_date="20250602", end_date="20250603")
+                if len(df) >= 1:
+                    row = df.iloc[-1]
+                    prev = df.iloc[-2] if len(df) >= 2 else row
+                    chg_pct = round((row["close"] - prev["close"]) / prev["close"] * 100, 2)
+                    data[name] = {
+                        "name": name, "close": round(row["close"], 2),
+                        "chg_pct": chg_pct,
+                        "volume": round(row["vol"] / 100000000, 2),
+                        "code": code
+                    }
+            except Exception:
+                pass
         return jsonify({
-            "指数": "上证指数", "现价": float(latest["close"]),
-            "涨跌幅": round(float(latest["pct_chg"]), 2),
-            "成交量": f"{float(latest['vol'])/10000:.1f}万手",
+            "指数": list(data.keys()),
+            "数据": data,
             "时间": datetime.now().strftime("%Y-%m-%d %H:%M")
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ========== 全市场批量扫描接口（同步，返回结果）============
-@app.route("/api/v1/scan/batch", methods=["POST"])
-def scan_batch():
-    """接收股票代码列表，批量扫描，返回结果"""
-    body = request.get_json() or {}
-    codes = body.get("codes", [])
-    if not codes:
-        return jsonify({"error": "codes参数不能为空"}), 400
-    if len(codes) > 100:
-        return jsonify({"error": "单次最多100只股票"}), 400
-
-    results = {}
-    for code in codes:
-        r = scan_one(code)
-        if r:
-            results[code] = r
-
-    return jsonify({
-        "count": len(results),
-        "total_submitted": len(codes),
-        "results": results,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M")
-    })
-
-# ========== 全市场扫描接口（快速异步多线程版）============
-@app.route("/api/v1/scan/market", methods=["POST"])
-def scan_market():
-    """触发全市场扫描，多线程并发，速度提升20倍"""
-    body = request.get_json() or {}
-    force = body.get("force", False)
-
-    state_file = "/tmp/scan_state.json"
-    state = {"status": "idle", "started_at": None, "finished_at": None, "count": 0}
-    try:
-        with open(state_file) as f:
-            state = json.load(f)
-    except:
-        pass
-
-    if state["status"] == "running" and not force:
-        return jsonify({
-            "error": "扫描正在进行",
-            "started_at": state.get("started_at"),
-            "message": "请等待当前扫描完成，或用 force=true 强制重启"
-        }), 409
-
-    def run_scan():
-        state["status"] = "running"
-        state["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(state_file, "w") as f:
-            json.dump(state, f)
-
-        try:
-            log.info("开始全市场快速扫描...")
-            df = pro.stock_basic(exchange="", list_status="L", fields="ts_code,name")
-            all_stocks = [(row["ts_code"], row["name"]) for _, row in df.iterrows()]
-
-            results = {"★★★": [], "★★": [], "★": [], "☆": []}
-            done_count = [0]
-
-            def scan_batch(stocks_batch):
-                batch_results = []
-                for ts_code, name in stocks_batch:
-                    r = scan_one(ts_code)
-                    if r:
-                        r["name"] = name
-                        batch_results.append(r)
-                return batch_results
-
-            # 分批处理，每批大小
-            BATCH = 50
-            total = len(all_stocks)
-            progress = [0]
-
-            for batch_start in range(0, total, BATCH):
-                batch_end = min(batch_start + BATCH, total)
-                batch = all_stocks[batch_start:batch_end]
-
-                # 多线程并发扫描这一批
-                with ThreadPoolExecutor(max_workers=50) as executor:
-                    futures = {executor.submit(scan_one, ts_code): ts_code for ts_code, _ in batch}
-                    for future in as_completed(futures):
-                        r = future.result()
-                        if r:
-                            ts_code = futures[future]
-                            name_map = dict(all_stocks)
-                            r["name"] = name_map.get(ts_code, ts_code)
-                            results[r["共振"]].append(r)
-                        done_count[0] += 1
-
-                if batch_end % 500 == 0 or batch_end == total:
-                    log.info(f"快速扫描进度 {batch_end}/{total} ({batch_end/total*100:.0f}%)")
-
-            # 保存结果
-            with open("/tmp/scan_result.json", "w", encoding="utf-8") as f:
-                json.dump(results, f, ensure_ascii=False, indent=2)
-
-            state["status"] = "done"
-            state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            state["count"] = sum(len(v) for v in results.values())
-            with open(state_file, "w") as f:
-                json.dump(state, f)
-
-            # 飞书推送
-            fmt = format_feishu(results)
-            send_feishu(fmt)
-            log.info(f"全市场快速扫描完成! 共 {state['count']} 只股票入选")
-
-        except Exception as e:
-            log.error(f"全市场扫描失败: {e}")
-            state["status"] = "error"
-            state["error"] = str(e)
-            with open(state_file, "w") as f:
-                json.dump(state, f)
-
-    thread = threading.Thread(target=run_scan, daemon=True)
-    thread.start()
-
-    return jsonify({
-        "status": "started",
-        "message": f"全市场快速扫描已启动（多线程20并发），约15-20分钟完成",
-        "check_url": "/api/v1/scan/state",
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M")
-    })
-
-@app.route("/api/v1/scan/state")
-def scan_state():
-    """查询当前扫描状态"""
-    try:
-        with open("/tmp/scan_state.json") as f:
-            state = json.load(f)
-    except:
-        state = {"status": "no_scan_yet"}
-    return jsonify(state)
-
-@app.route("/api/v1/scan/results")
-def scan_results():
-    """读取上次扫描结果"""
-    try:
-        with open("/tmp/scan_result.json") as f:
-            results = json.load(f)
-    except:
-        return jsonify({"error": "暂无扫描结果，请先触发扫描"}), 404
-    
-    # 返回按评分排序的结果
-    all_stocks = []
-    for star in ["★★★", "★★", "★", "☆"]:
-        for r in results.get(star, []):
-            r["级别"] = star
-            all_stocks.append(r)
-    
-    return jsonify({
-        "total": len(all_stocks),
-        "results": all_stocks,
-        "summary": {star: len(results.get(star, [])) for star in ["★★★", "★★", "★", "☆"]}
-    })
-
-# ========== 辅助函数 ==========
-def format_feishu(results):
-    parts = []
-    for star in ["★★★", "★★", "★", "☆"]:
-        stocks = results.get(star, [])
-        if not stocks:
-            continue
-        e = "🔴" if star == "★★★" else "🟠" if star == "★★" else "🟡" if star == "★" else "⚪"
-        lines = [f"{e}{star} {len(stocks)}只"]
-        for r in stocks[:5]:
-            a = "✅买入" if star == "★★★" else "👀观察"
-            lines.append(f"{a} {r.get('name',r.get('code'))}({r.get('code')}) {r.get('price')}元 RSI={r.get('rsi',0):.0f} VR={r.get('vr',0):.1f} 评分={r.get('score',0)}")
-        if len(stocks) > 5:
-            lines.append(f"等{len(stocks)-5}只...")
-        parts.append("\n".join(lines))
-    return f"📊 全市场共振扫描\n{datetime.now().strftime('%Y-%m-%d %H:%M')}\n{'='*40}\n\n" + "\n\n".join(parts)
-
-def get_name(ts_code):
-    names = {
-        "600162": "香江控股", "301581": "黄山谷捷",
-        "600143": "金发科技", "601985": "中国核电",
-        "601101": "昊华能源", "600027": "华电国际",
-        "600121": "郑州煤电", "600280": "中央商场",
-        "601016": "节能风电", "601600": "中国铝业",
-        "601918": "新集能源", "600011": "华能国际",
-    }
-    code = ts_code.replace(".SH", "").replace(".SZ", "")
-    return names.get(code, code)
-
-# ========== 静态文件/Swagger Docs ==========
+# ========== API文档 ==========
 SWAGGER_HTML = """
 <!DOCTYPE html>
-<html><head><title>A股分析 API</title></head>
-<body style="font-family: monospace; padding: 40px; background: #0a0a0a; color: #fff;">
-<h2 style="color: #4ade80">📊 A股分析系统 API</h2>
-<table style="border-collapse: collapse; width: 700px">
-<tr style="border-bottom: 1px solid #333"><th style="text-align:left;padding:8px">方法</th><th style="text-align:left;padding:8px">路径</th><th style="text-align:left;padding:8px">说明</th></tr>
-<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/health</td><td style="padding:8px">健康检查</td></tr>
-<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/api/v1/market/summary</td><td style="padding:8px">大盘摘要</td></tr>
-<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/api/v1/stock/analysis?code=600162.SH</td><td style="padding:8px">持仓股分析</td></tr>
-<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#f59e0b">POST</td><td style="padding:8px">/api/v1/scan/batch</td><td style="padding:8px">批量扫描（≤100只）</td></tr>
-<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#f59e0b">POST</td><td style="padding:8px">/api/v1/scan/market</td><td style="padding:8px">全市场扫描（异步）</td></tr>
-<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/api/v1/scan/state</td><td style="padding:8px">查询扫描状态</td></tr>
-<tr style="border-bottom: 1px solid #222"><td style="padding:8px;color:#4ade80">GET</td><td style="padding:8px">/api/v1/scan/results</td><td style="padding:8px">读取上次扫描结果</td></tr>
+<html><head><meta charset="utf-8"><title>A股分析API</title>
+<style>
+body{background:#0a0a0a;color:#e0e0e0;font-family:system-ui;max-width:900px;margin:0 auto;padding:20px}
+h1{color:#60a5fa;border-bottom:2px solid #60a5fa;padding-bottom:8px}
+h3{color:#34d399;margin-top:28px}
+table{width:100%;border-collapse:collapse;margin:12px 0}
+td{padding:8px 12px;border-bottom:1px solid #222;font-size:14px}
+tr:hover background:#1a2}
+.method-get td:first-child{color:#4ade80}
+.method-post td:first-child{color:#f97316}
+.desc{color:#888;font-size:12px;margin-top:4px}
+pre{background:#111;padding:14px;border-radius:8px;color:#86efac;font-size:13px;overflow-x:auto}
+</style></head>
+<body>
+<h1>📊 A股分析API</h1>
+<p>服务状态: <span style="color:#4ade80">● Online</span> | Tushare: ✅ 已连接</p>
+
+<h3>接口列表</h3>
+<table>
+<tr><td style="color:#4ade80">GET</td><td>/health</td><td>健康检查</td></tr>
+<tr><td style="color:#4ade80">GET</td><td>/api/v1/market/summary</td><td>大盘指数实时行情</td></tr>
+<tr><td style="color:#4ade80">GET</td><td>/api/v1/stock/analysis?code=600162.SH</td><td>单股技术分析</td></tr>
+<tr><td style="color:#f97316">POST</td><td>/api/v1/scan/batch</td><td>批量技术扫描（≤100只）</td></tr>
 </table>
-<h3 style="color:#f59e0b">批量扫描示例</h3>
-<pre style="background:#1a1a1a;padding:16px;border-radius:8px;color:#86efac">
-POST /api/v1/scan/batch
-Body: {"codes": ["600162.SH","601985.SH","601101.SH"]}
-</pre>
-<h3 style="color:#f59e0b">全市场扫描示例</h3>
-<pre style="background:#1a1a1a;padding:16px;border-radius:8px;color:#86efac">
-POST /api/v1/scan/market
-Body: {}   # 空对象即可，5-8分钟后结果推送到飞书
-</pre>
+
+<h3>批量扫描示例</h3>
+<pre>POST /api/v1/scan/batch
+Body: {"codes": ["600162.SH","601985.SH","601101.SH"]}</pre>
+
+<h3>返回字段说明</h3>
+<table>
+<tr><td>rsi</td><td>RSI相对强弱指标（14日）</td></tr>
+<tr><td>vr</td><td>量比（近5日均量/近20日均量）</td></tr>
+<tr><td>ma多头</td><td>MA5>MA10>MA20多头排列</td></tr>
+<tr><td>共振</td><td>★★★=强烈买入信号</td></tr>
+<tr><td>新公式评分</td><td>6维度综合评分，≥6分启动买入窗口</td></tr>
+</table>
 </body></html>"""
 
 @app.route("/docs")
@@ -454,6 +292,7 @@ def docs():
 def index():
     return redirect("/docs")
 
+# ========== 注册klines蓝图（修复404） ==========
 app.register_blueprint(klines_bp)
 
 if __name__ == "__main__":
