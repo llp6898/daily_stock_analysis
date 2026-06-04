@@ -18,6 +18,18 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("stock-api")
 
+# ========== 版本路由（用于确认Railway拉取的代码版本） ==========
+@app.route("/api/v1/version")
+def version():
+    """返回当前代码版本，强制Railway重新构建"""
+    return jsonify({
+        "version": "1.0.6",
+        "commit": "863d223",
+        "build_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "minutes_fix": "a31e7cf",
+        "status": "ok"
+    })
+
 # ========== CORS 跨域支持 ==========
 @app.after_request
 def add_cors(response):
@@ -261,27 +273,27 @@ pre{background:#111;padding:14px;border-radius:8px;color:#86efac;font-size:13px;
 <body>
 <h1>📊 A股分析API</h1>
 <p>服务状态: <span style="color:#4ade80">● Online</span> | Tushare: ✅ 已连接</p>
+<p>版本: <span style="color:#f97316">1.0.6</span> | 构建: <span style="color:#f97316">863d223</span></p>
 
 <h3>接口列表</h3>
 <table>
 <tr><td style="color:#4ade80">GET</td><td>/health</td><td>健康检查</td></tr>
+<tr><td style="color:#4ade80">GET</td><td>/api/v1/version</td><td>当前版本（确认Railway拉取版本）</td></tr>
 <tr><td style="color:#4ade80">GET</td><td>/api/v1/market/summary</td><td>大盘指数实时行情</td></tr>
 <tr><td style="color:#4ade80">GET</td><td>/api/v1/stock/analysis?code=600162.SH</td><td>单股技术分析</td></tr>
 <tr><td style="color:#f97316">POST</td><td>/api/v1/scan/batch</td><td>批量技术扫描（≤100只）</td></tr>
+<tr><td style="color:#4ade80">GET</td><td>/api/v1/klines/600519.SH?period=daily</td><td>K线历史数据</td></tr>
 </table>
 
 <h3>批量扫描示例</h3>
 <pre>POST /api/v1/scan/batch
 Body: {"codes": ["600162.SH","601985.SH","601101.SH"]}</pre>
 
-<h3>返回字段说明</h3>
-<table>
-<tr><td>rsi</td><td>RSI相对强弱指标（14日）</td></tr>
-<tr><td>vr</td><td>量比（近5日均量/近20日均量）</td></tr>
-<tr><td>ma多头</td><td>MA5>MA10>MA20多头排列</td></tr>
-<tr><td>共振</td><td>★★★=强烈买入信号</td></tr>
-<tr><td>新公式评分</td><td>6维度综合评分，≥6分启动买入窗口</td></tr>
-</table>
+<h3>K线接口示例</h3>
+<pre>GET /api/v1/klines/600519.SH?period=daily&start_date=20250101
+GET /api/v1/klines/601985.SH?period=weekly
+GET /api/v1/klines/601985.SH?period=monthly
+GET /api/v1/klines/601985.SH?period=5min</pre>
 </body></html>"""
 
 @app.route("/docs")
@@ -291,6 +303,11 @@ def docs():
 @app.route("/")
 def index():
     return redirect("/docs")
+
+# ========== Railway健康检查根路径 ==========
+@app.route("/")
+def root():
+    return "ok", 200
 
 # ========== 注册klines蓝图（修复404） ==========
 app.register_blueprint(klines_bp)
