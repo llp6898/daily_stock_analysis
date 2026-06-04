@@ -24,18 +24,49 @@ def get_pro():
 
 
 def code_normalize(code: str) -> str:
-    """统一股票代码格式"""
+    """统一股票代码格式，返回 XXXXXX.SH / XXXXXX.SZ（Tushare格式）"""
     code = code.upper().strip()
-    # 如果已带沪/深/京前缀，直接返回
-    if any(code.startswith(p) for p in ["SH", "SZ", "BJ"]):
-        return code
-    # 否则根据代码数字前缀补全
+    # 第一步：去掉 .SH / .SZ / .BJ 后缀（标准Tushare格式变前缀）
+    for suffix in [".SH", ".SZ", ".BJ"]:
+        if code.endswith(suffix):
+            code = code[:-len(suffix)]
+            break
+    # 第二步：去掉可能有的 SH/SZ/BJ 前缀（数字编码不应有前缀）
+    for p in ["SH", "SZ", "BJ"]:
+        if code.startswith(p):
+            code = code[len(p):]
+            break
+    # 第三步：根据数字前缀判断交易所，返回 XXXXXX.EX 格式（Tushare标准）
     if code.startswith(("6", "5", "9")):
-        code = "SH" + code
+        return code + ".SH"   # 沪市
     elif code.startswith(("0", "3", "2")):
-        code = "SZ" + code
+        return code + ".SZ"   # 深市
     elif code.startswith(("4", "8")):
-        code = "BJ" + code
+        return code + ".BJ"   # 京市
+    return code  # 纯数字（回测模式）
+
+
+def ts_code_from_code(code: str) -> str:
+    """将标准化后的纯数字代码转为Tushare格式 (600519.SH)"""
+    code = code.upper().strip()
+    # 去掉 .SH/.SZ/.BJ 后缀
+    for suffix in [".SH", ".SZ", ".BJ"]:
+        if code.endswith(suffix):
+            code = code[:-len(suffix)]
+            break
+    # 去掉 SH/SZ/BJ 前缀
+    for p in ["SH", "SZ", "BJ"]:
+        if code.startswith(p):
+            code = code[len(p):]
+            break
+    # 根据数字首位判断交易所，补回正确的 .SH/.SZ/.BJ 后缀
+    if code.startswith(("6", "5", "9")):
+        return code + ".SH"
+    elif code.startswith(("0", "3", "2")):
+        return code + ".SZ"
+    elif code.startswith(("4", "8")):
+        return code + ".BJ"
+    # 回测模式：纯数字原样返回
     return code
 
 
@@ -56,6 +87,9 @@ INDEX_SET = {
     "000001.SH", "399001.SZ", "000300.SH", "000016.SH", "000905.SH",
     "399006.SZ", "000688.SH", "399005.SZ", "000688.SH",
 }
+# 对应的纯数字形式
+INDEX_NUMBERS = {"000001", "399001", "000300", "000016", "000905",
+                 "399006", "000688", "399005"}
 
 
 def fetch_daily(ts_code: str, start_date: str, end_date: str, adjust: str = "qfq"):
@@ -146,14 +180,16 @@ def get_klines(code: str):
         end_date   = request.args.get("end_date", datetime.now().strftime("%Y%m%d"))
         adjust     = request.args.get("adjust", "qfq")
 
-        ts_code = code_normalize(code)
+        normalized = code_normalize(code)          # 如 "SH600519"
+        ts_code    = ts_code_from_code(normalized)  # 如 "600519.SH" (Tushare格式)
+        import logging as _log
+        _log.warning(f"[klines] raw_code={code} normalized={normalized} ts_code={ts_code}")
 
-        # 判断指数 vs 股票
-        is_index = ts_code in INDEX_SET or (
-            ts_code.startswith(("SH", "SZ")) and
-            ts_code.replace(".SH", "").replace(".SZ", "").isdigit() and
-            len(ts_code.replace(".", "")) <= 8 and
-            ts_code.replace(".SH", "").replace(".SZ", "").startswith(("000", "399"))
+        # 判断指数 vs 股票（使用标准化后纯数字代码）
+        is_index = (normalized in INDEX_NUMBERS) or (
+            normalized.isdigit() and
+            len(normalized) <= 8 and
+            normalized.startswith(("000", "399"))
         )
 
         # 获取数据
@@ -269,7 +305,8 @@ def get_klines_batch():
         results = {}
         for code in codes:
             try:
-                ts_code = code_normalize(code)
+                normalized = code_normalize(code)
+                ts_code = ts_code_from_code(normalized)
                 if period == "daily":
                     df = fetch_daily(ts_code, start_date, end_date, adjust)
                 elif period == "weekly":
@@ -285,12 +322,12 @@ def get_klines_batch():
                     date_col = "trade_date" if "trade_date" in df.columns else df.columns[0]
                     dates  = df[date_col].astype(str).tolist()
                     closes = df["close"].astype(float).round(2).tolist() if "close" in df.columns else []
-                    results[ts_code] = {
+                    results[normalized] = {
                         "dates": dates, "closes": closes,
                         "count": len(dates),
                     }
                 else:
-                    results[ts_code] = {"error": "无数据"}
+                    results[normalized] = {"error": "无数据"}
             except Exception as e:
                 results[code] = {"error": str(e)}
 
@@ -322,7 +359,8 @@ def get_ohlcv():
     end_date   = request.args.get("end", datetime.now().strftime("%Y%m%d"))
     adjust     = request.args.get("adjust", "qfq")
 
-    ts_code = code_normalize(code)
+    normalized = code_normalize(code)
+    ts_code    = ts_code_from_code(normalized)
 
     if period == "daily":
         df = fetch_daily(ts_code, start_date, end_date, adjust)
@@ -347,7 +385,7 @@ def get_ohlcv():
     vols   = df["vol"].astype(float).round(0).tolist() if "vol" in df.columns else []
 
     return jsonify({
-        "code": ts_code,
+        "code": normalized,
         "period": period,
         "dates": dates,
         "opens": opens, "highs": highs, "lows": lows, "closes": closes, "vols": vols,
