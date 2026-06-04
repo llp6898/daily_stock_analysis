@@ -137,6 +137,11 @@ def fetch_monthly(ts_code: str, start_date: str, end_date: str):
 
 def fetch_minute(ts_code: str, start_date: str, end_date: str, period: str = "60"):
     """分钟K线数据（Tushare pro_bar）"""
+    # 限制窗口为5个交易日
+    import datetime as _dt
+    _start = _dt.datetime.strptime(start_date, "%Y%m%d")
+    if (_dt.datetime.now() - _start).days > 5:
+        start_date = (_dt.datetime.now() - _dt.timedelta(days=5)).strftime("%Y%m%d")
     # period: 1/5/15/30/60 分钟
     pro = get_pro()
     freq_map = {"1": "1min", "5": "5min", "15": "15min", "30": "30min", "60": "60min"}
@@ -146,7 +151,7 @@ def fetch_minute(ts_code: str, start_date: str, end_date: str, period: str = "60
         # 使用 pro_bar 获取分钟K线（仅限最近交易日）
         df = pro.pro_bar(
             ts_code=ts_code,
-            adj=adj if (adj := "qfq") else "qfq",
+            adj="qfq",
             freq=freq,
             start_date=start_date,
             end_date=end_date,
